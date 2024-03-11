@@ -1,0 +1,11 @@
+{
+    "Duration" : "select 'DURATION_SELECTED' key, {past_days}||' days' value",
+    "Database" : "select 'DATABASE_SELECTED' key, '{catalog}' value",
+    "Oldest"   : "select 'OLDEST_EVENT_AVAILABLE' key, TO_TIMESTAMP(min(\"EVENT_TIME\")) value from \"NOTIFICATION_LOG\"",
+    "Table" : "select 'TABLE_SELECTED' key, '{table}' value",
+    "Global_events": "select 'ALL_EVENTS' key, count(*) value from \"NOTIFICATION_LOG\" where \"EVENT_TIME\"+{past_days}::bigint*86400 > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::bigint",
+    "Database_events": "select 'DB_EVENTS' key, count(*) value from \"NOTIFICATION_LOG\" where \"DB_NAME\"='{catalog}' and \"EVENT_TIME\"+{past_days}::bigint*86400 > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::bigint",
+    "Table_events": "select 'TABLE_EVENTS' key, count(*) value from \"NOTIFICATION_LOG\" where {table_filter} \"DB_NAME\"='{catalog}' and \"EVENT_TIME\"+{past_days}::bigint*86400 > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::bigint",
+    "Database_event_types": "select \"EVENT_TYPE\" key, count(*) value from \"NOTIFICATION_LOG\" where {table_filter} \"DB_NAME\"='{catalog}' and \"EVENT_TIME\"+{past_days}::bigint*86400 > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::bigint group by \"EVENT_TYPE\""
+}
+
