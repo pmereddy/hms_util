@@ -394,41 +394,6 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
         connection_pool.putconn(connection)
 
 """
-Function to extract change details for past_days at database/table level
-"""
-def get_change_details(database, catalog, table, results_file, past_days):
-    try:
-        logging.info(f"Running get change details for database: {catalog}, table: {table}, duration: {past_days}")
-        connection = connection_pool.getconn()
-        cursor = connection.cursor()
-        if table == 'ALL':
-            list_events=f'select TO_TIMESTAMP("EVENT_TIME"), "EVENT_TYPE", "DB_NAME", "TBL_NAME", "MESSAGE", "MESSAGE_FORMAT" from "NOTIFICATION_LOG" where "DB_NAME"=\'{catalog}\' and "EVENT_TYPE" not like \'%TXN\' order by "EVENT_ID"'
-        else:
-            list_events=f'select TO_TIMESTAMP("EVENT_TIME"), "EVENT_TYPE", "DB_NAME", "TBL_NAME", "MESSAGE", "MESSAGE_FORMAT" from "NOTIFICATION_LOG" where "TBL_NAME"=\'{table}\' and "DB_NAME"=\'{catalog}\' and "EVENT_TYPE" not like \'%TXN\' order by "EVENT_ID"'
-        cursor.execute(list_events)
-        results = cursor.fetchall()
-        logging.info(f"Found {len(results)} events")
-        with open(results_file, "w") as out:
-            for entry in results:
-                header=f"-- {entry[0]}: DB: {entry[2]}, EVENT: {entry[1]}, TABLE: {entry[3]}\n"
-                out.write(header)
-                bytes = gzip.decompress(base64.b64decode(entry[4]))
-                #out.write(json.loads(bytes.decode('utf-8')))
-                msg_dict = json.loads(bytes.decode('utf-8'))
-                for key, value in msg_dict.items():
-                    out.write(f"{key} : {value}\n")
-                #out.write(json.dumps(json.loads(bytes.decode('utf-8')),indent=4))
-                out.write("\n\n")
-
-    except Exception as e:
-        connection.rollback()
-        print("Error:", e)
-        traceback.print_exc()
-    finally:
-        cursor.close()
-        connection_pool.putconn(connection)
-
-"""
 Function to generate DDL to convert eligible hive tables to iceberg
 """
 def iceberg_migration_ddl(database, catalog, results_file, output_file):
@@ -513,7 +478,7 @@ def backup_database_ddl(database, catalog, output_file, queries):
             fd.write(header)
 
         # Create database statement
-        if get_property(config, 'backup_ddl', 'create_db_statement', 'true') == 'true':
+        if get_property(config, 'schema_backup', 'create_db_statement', 'true') == 'true':
             create_db = f'select "DESC", "DB_LOCATION_URI" from "DBS" where "NAME"=\'{catalog}\''
             cursor.execute(create_db)
             results = cursor.fetchone()
@@ -543,7 +508,7 @@ def backup_database_ddl(database, catalog, output_file, queries):
 
         # Get views and materialized views and append to the results file at the end.
         # The views and materialized views are ordered to resolve the dependencies
-        if get_property(config, 'backup_ddl', 'include_views', 'true') == 'true':
+        if get_property(config, 'schema_backup', 'include_views', 'true') == 'true':
             view_list_cmd = f'select "TBL_ID" from "TBLS" where "TBL_TYPE" in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "TBL_ID"'
             cursor.execute(view_list_cmd)
             rows = cursor.fetchall()
@@ -563,7 +528,7 @@ def backup_database_ddl(database, catalog, output_file, queries):
                         fd.write(create_view_statement)
 
         # Get functions DDL and add to the end of the results file
-        if get_property(config, 'backup_ddl', 'include_functions', 'true') == 'true':
+        if get_property(config, 'schema_backup', 'include_functions', 'true') == 'true':
             func_list_cmd = f'select "CLASS_NAME", "FUNC_NAME","FUNC_TYPE", "OWNER_NAME" from "FUNCS" where "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "FUNC_ID"'
             cursor.execute(func_list_cmd)
             rows = cursor.fetchall()
@@ -618,19 +583,19 @@ if __name__ == "__main__":
         logging.error("Invalid config file: missing source section")
         sys.exit(1)
 
-    # Check config file : command is backup_ddl. Check if backup_ddl section is missing
-    if config['global']['command'] == 'backup_ddl':
-        if 'backup_ddl' in config:
-            backup_ddl_section = config['backup_ddl']
-            logger.log(logging.DEBUG, "[backup_ddl] section:")
-            for option in backup_ddl_section:
-                logger.log(logging.DEBUG, f"{option} = {backup_ddl_section[option]}")
+    # Check config file : command is schema_backup. Check if schema_backup section is missing
+    if config['global']['command'] == 'schema_backup':
+        if 'schema_backup' in config:
+            schema_backup_section = config['schema_backup']
+            logger.log(logging.DEBUG, "[schema_backup] section:")
+            for option in schema_backup_section:
+                logger.log(logging.DEBUG, f"{option} = {schema_backup_section[option]}")
             logger.log(logging.DEBUG, f"\n")
         else:
-            logging.error("Invalid config file: missing backup_ddl section")
+            logging.error("Invalid config file: missing schema_backup section")
             sys.exit(1)
 
-    # Check config file : command is to backup_ddl. But, backup_ddl section is missing
+    # Check config file : command is to schema_backup. But, schema_backup section is missing
     if config['global']['command'] == 'compare':
         if 'source' in config and 'target' in config:
             logging.debug("source and target sections present")
@@ -653,7 +618,7 @@ if __name__ == "__main__":
     # Connect to source hive metastore
     try:
         connection_pool = psycopg2.pool.SimpleConnectionPool(
-            minconn=1, maxconn=3,
+            minconn=1, maxconn=5,
                         dbname=get_property(config, 'source', 'database', 'hive'),
                         user=get_property(config, 'source', 'user', 'hive'),
                         password=get_property(config, 'source', 'password', 'xxxx'),
@@ -661,124 +626,99 @@ if __name__ == "__main__":
                         port=get_property(config, 'source', 'port', 5432))
     except Exception as e:
         logging.error("Connecting to source: {e}")
+        sys.exit(1)
 
-    # command: summary
-    if config['global']['command'] == 'summary':
+    # If hive catalog is set to ALL, find all hive catalogs and run the command on each
+    db = get_property(config, 'global', 'catalog', 'default')
+    if db == 'ALL':
         try:
-            queries = read_query_file(os.path.join(
-                              get_property(config, 'global', 'queries_dir', 'queries'),
-                              get_property(config, 'global', 'database_type', 'postgresql'),
-                              get_property(config, 'summary', 'query_file', 'summary.queries'))
-            )
-            summary_info = get_summary(
-                get_property(config, 'source', 'database', 'hive'),
-                get_property(config, 'global', 'catalog', 'default'),
-                queries
-            )
-            logging.debug(f"Summary info: {summary_info}")
-            filebase = get_property(config, 'global', 'catalog', 'default')+"_summary_"+str(signature)
-            output_file = os.path.join(results_dir,filebase+".csv")
-            write_csv_file(summary_info, output_file)
-            logging.info(f"{config['global']['command']} saved to {output_file}")
-
-            output_file = os.path.join(results_dir,filebase+".md")
-            write_md_file(summary_info, output_file)
-            logging.info(f"{config['global']['command']} saved to {output_file}")
+            get_db_list="select \"NAME\" from \"DBS\" where \"NAME\" not in ('sys', 'information_schema');"
+            connection = connection_pool.getconn()
+            cursor = connection.cursor()
+            cursor.execute(get_db_list)
+            tdbs = cursor.fetchall()
+            dbs = [db[0] for db in tdbs]
+            connection_pool.putconn(connection)
         except Exception as e:
-            logging.error(f"Getting summary: {e}")
+            logging.error("Connecting to source: {e}")
+            sys.exit(1)
+    else:
+        dbs=[db]
 
-    # command: reports
-    elif config['global']['command'] == 'reports':
-        try:
-            report_queries = read_query_file(os.path.join(
-                              get_property(config, 'global', 'queries_dir', 'queries'),
-                              get_property(config, 'global', 'database_type', 'postgresql'),
-                              get_property(config, 'reports', 'query_file', 'reports.queries')))
-
-            create_database_reports(
-                get_property(config, 'source', 'database', 'hive'),
-                get_property(config, 'global', 'catalog', 'default'),
-                report_queries,
-                results_dir 
-            )
-        except Exception as e:
-            logging.error(f"Database reports: {e}")
-
-    # command: backup ddl
-    elif config['global']['command'] == 'backup_ddl':
-        try:
-            backup_ddl_queries = read_query_file(os.path.join(
-                              get_property(config, 'global', 'queries_dir', 'queries'),
-                              get_property(config, 'global', 'database_type', 'postgresql'),
-                              get_property(config, 'backup_ddl', 'query_file', 'backup_ddl.queries')))
-            filebase = f"{get_property(config, 'global', 'catalog', 'default')}_backup_{signature}.ddl"
-            results_file = os.path.join(results_dir, filebase)
-            backup_database_ddl(
-                get_property(config, 'source', 'database', 'hive'),
-                get_property(config, 'global', 'catalog', 'default'),
-                results_file,
-                backup_ddl_queries)
-            logging.info(f"{config['global']['command']} saved to {results_file}")
-        except Exception as e:
-            logging.error(f"Getting backup_ddl: {str(e)}")
-
-    # command: migration to iceberg
-    elif config['global']['command'] == 'iceberg_migration':
-        filebase = f"{get_property(config, 'global', 'catalog', 'default')}_iceberg_migration_{signature}"
-        output_file = os.path.join(results_dir, filebase+".log")
-        results_file = os.path.join(results_dir, filebase+".ddl")
-        iceberg_migration_ddl(
-            get_property(config, 'source', 'database', 'hive'),
-            get_property(config, 'global', 'catalog', 'default'),
-            results_file,
-            output_file)
-        logging.info(f"saved ddl to {results_file}")
-        logging.info(f"saved logs to {output_file}")
-
-    # command: change history of a database
-    elif config['global']['command'] == 'change_history':
-        if get_property(config, 'change_history', 'summary', '1') == '1':
+    for db in dbs:
+        # command: Summary
+        if config['global']['command'] == 'summary':
             try:
                 queries = read_query_file(os.path.join(
                                   get_property(config, 'global', 'queries_dir', 'queries'),
                                   get_property(config, 'global', 'database_type', 'postgresql'),
-                                  get_property(config, 'change_history', 'change_summary_query_file', 'change_summary.queries')))
+                                  get_property(config, 'summary', 'query_file', 'summary.queries'))
+                )
                 summary_info = get_summary(
                     get_property(config, 'source', 'database', 'hive'),
-                    get_property(config, 'global', 'catalog', 'default'),
-                    queries,
-                    table=get_property(config, 'change_history', 'table', 'ALL'),
-                    past_days=get_property(config, 'change_history', 'past_days', 7)
-                    )
-                if summary_info:
-                    logging.debug(f"{summary_info}")
-                    filebase = get_property(config, 'global', 'catalog', 'default')+"_change_summary_"+str(signature)
+                    db,
+                    queries
+                )
+                filebase = get_property(config, 'global', 'catalog', 'default')+"_summary_"+str(signature)
+                output_file = os.path.join(results_dir,filebase+".csv")
+                write_csv_file(summary_info, output_file)
+                logging.info(f"{config['global']['command']} for database: {db} saved to {output_file}")
 
-                    output_file = os.path.join(results_dir, filebase+".csv")
-                    write_csv_file(summary_info, output_file)
-                    logging.info(f"{config['global']['command']} saved to {output_file}")
-
-                    output_file = os.path.join(results_dir, filebase+".md")
-                    write_md_file(summary_info, output_file)
-                    logging.info(f"{config['global']['command']} saved to {output_file}")
-                else:
-                    logging.warn(f"No data for {config['global']['command']} (summary)")
-            except Exception as e:
-              logging.error(f"Getting change summary: {e}")
-        if get_property(config, 'change_history', 'details', '1') == '1':
-            try:
-                filebase = get_property(config, 'global', 'catalog', 'default')+"_change_details_"+str(signature)
-                output_file = os.path.join(results_dir, filebase+".log")
-                get_change_details(
-                    get_property(config, 'source', 'database', 'hive'),
-                    get_property(config, 'global', 'catalog', 'default'),
-                    get_property(config, 'change_history', 'table', 'ALL'),
-                    output_file,
-                    get_property(config, 'change_history', 'past_days', 7)
-                    )
+                output_file = os.path.join(results_dir,filebase+".md")
+                write_md_file(summary_info, output_file)
                 logging.info(f"{config['global']['command']} saved to {output_file}")
             except Exception as e:
-                logging.error(f"Getting change details: {e}")
-    else:
-        logging.error(f"Unsupported command specified: {config['global']['command']}")
-        sys.exit(1)
+                logging.error(f"Getting summary: {e}")
+
+        # command: reports
+        elif config['global']['command'] == 'reports':
+            try:
+                report_queries = read_query_file(os.path.join(
+                                  get_property(config, 'global', 'queries_dir', 'queries'),
+                                  get_property(config, 'global', 'database_type', 'postgresql'),
+                                  get_property(config, 'reports', 'query_file', 'reports.queries')))
+
+                create_database_reports(
+                    get_property(config, 'source', 'database', 'hive'),
+                    db,
+                    report_queries,
+                    results_dir 
+                )
+            except Exception as e:
+                logging.error(f"Database reports: {e}")
+
+        # command: backup ddl
+        elif config['global']['command'] == 'schema_backup':
+            try:
+                schema_backup_queries = read_query_file(os.path.join(
+                                  get_property(config, 'global', 'queries_dir', 'queries'),
+                                  get_property(config, 'global', 'database_type', 'postgresql'),
+                                  get_property(config, 'schema_backup', 'query_file', 'backup_ddl.queries')))
+                filebase = f"{db}_backup_{signature}.ddl"
+                results_file = os.path.join(results_dir, filebase)
+                backup_database_ddl(
+                    get_property(config, 'source', 'database', 'hive'),
+                    db,
+                    results_file,
+                    schema_backup_queries)
+                logging.info(f"{config['global']['command']} saved to {results_file}")
+            except Exception as e:
+                logging.error(f"Getting schema_backup: {str(e)}")
+
+        # command: migration to iceberg
+        elif config['global']['command'] == 'iceberg_migration':
+            filebase = f"{db}_iceberg_migration_{signature}"
+            output_file = os.path.join(results_dir, filebase+".log")
+            results_file = os.path.join(results_dir, filebase+".ddl")
+            iceberg_migration_ddl(
+                get_property(config, 'source', 'database', 'hive'),
+                db,
+                results_file,
+                output_file)
+            logging.info(f"saved ddl to {results_file}")
+            logging.info(f"saved logs to {output_file}")
+
+        else:
+            logging.error(f"Unsupported command specified: {config['global']['command']}")
+            sys.exit(1)
+
