@@ -158,6 +158,7 @@ def get_summary(database, catalog, queries, **kwargs):
     except Exception as e:
         traceback.print_exc()
         logging.error(f"An error occurred in get_summary: {e}")
+    connection_pool.putconn(connection)
     return summary
 
 
@@ -659,7 +660,7 @@ if __name__ == "__main__":
                     db,
                     queries
                 )
-                filebase = get_property(config, 'global', 'catalog', 'default')+"_summary_"+str(signature)
+                filebase = db+"_summary_"+str(signature)
                 output_file = os.path.join(results_dir,filebase+".csv")
                 write_csv_file(summary_info, output_file)
                 logging.info(f"{config['global']['command']} for database: {db} saved to {output_file}")
@@ -721,4 +722,3 @@ if __name__ == "__main__":
         else:
             logging.error(f"Unsupported command specified: {config['global']['command']}")
             sys.exit(1)
-
