@@ -62,7 +62,7 @@ def write_md_file(data, filename):
     max_value_length = max(len(str(value)) for value in values)
 
     # Create the Markdown table header
-    table = "| Metric | Value |\n"
+    table = "| METRIC | VALUE |\n"
     table += "|---" + "-" * max_key_length + "|---" + "-" * max_value_length + "|\n"
 
     # Add each key-value pair to the table
@@ -80,7 +80,7 @@ def tuples_to_html_table(query_name, columns, records):
     table_header=f"\n<h2> {query_name} </h2>\n"
     table_footer=f"<br><br>"
     # Build the header row
-    header_row = "<thead><tr>" + "".join(f"<th>{column}</th>" for column in columns) + "</tr></thead>"
+    header_row = "<thead><tr>" + "".join(f"<th>{column.upper()}</th>" for column in columns) + "</tr></thead>"
 
     # Build the rows with values
     rows = []
@@ -108,6 +108,7 @@ def tuples_to_markdown_table(query_name, columns, records):
     table_footer=f"\n\n"
 
     # Build the header row
+    columns = [ column.upper() for column in columns]
     header_row = " | ".join(columns) if columns else ""
     header_separator = " | ".join([":---" for _ in columns]) if columns else ""
 
@@ -177,7 +178,7 @@ def write_section2(hfd):
 
 """ Function to generate and save hive database reports """
 def create_database_reports(database, catalog, queries, results_dir):
-    logging.info(f"Generate reports for database: {catalog} and save to {results_dir}")
+    logging.info(f"Generate reports for database: {catalog}")
     md_tables=[]
     html_tables=[]
     try:
@@ -225,6 +226,7 @@ def create_database_reports(database, catalog, queries, results_dir):
     except Exception as e:
         traceback.print_exc()
         logging.error(f"error writing to report files in create_database_reports: {e}")
+    connection_pool.putconn(connection)
 
 
 """ 
