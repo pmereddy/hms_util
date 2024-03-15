@@ -18,6 +18,7 @@ import base64
 import gzip
 import csv
 import configparser
+import getpass
 import logging
 import argparse
 import traceback
@@ -580,6 +581,8 @@ if __name__ == "__main__":
         source_section = config['source']
         logger.log(logging.DEBUG, "[source] section:")
         for option in source_section:
+            if option == 'password':
+                continue
             logger.log(logging.DEBUG, f"{option} = {source_section[option]}")
         logger.log(logging.DEBUG, f"\n")
     else:
@@ -608,6 +611,9 @@ if __name__ == "__main__":
 
     logging.info(f"COMMAND: {config['global']['command']}")
 
+    password = get_property(config, 'source', 'password', '')
+    if password.isspace() or len(password) == 0:
+        password = getpass.getpass(prompt="Enter password for the source database: ")
 
     # check/create results_dir
     results_dir = get_property(config, 'global', 'results_dir', 'results')
@@ -624,7 +630,7 @@ if __name__ == "__main__":
             minconn=1, maxconn=5,
                         dbname=get_property(config, 'source', 'database', 'hive'),
                         user=get_property(config, 'source', 'user', 'hive'),
-                        password=get_property(config, 'source', 'password', 'xxxx'),
+                        password=password,
                         host=get_property(config, 'source', 'host', 'localhost'),
                         port=get_property(config, 'source', 'port', 5432))
     except Exception as e:
