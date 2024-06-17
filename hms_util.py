@@ -379,10 +379,25 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
             if query_name == 'Q18':
                 alter_statements = []
                 for entry in results:
-                    temp=f"ALTER TABLE {catalog}.{table_name} ADD PARTITION ({entry['PART_NAME']}) LOCATION '{entry['LOCATION']}';\n"
+                    part_key=entry['PART_NAME']
+                    key, value = part_key.split('=')
+                    try:
+                        int(value)
+                        is_numeric = True
+                    except ValueError:
+                        is_numeric = False
+
+                    if not is_numeric:
+                        part_key=f"{key}='{value}'"
+
+                    temp=f"ALTER TABLE {catalog}.{table_name} ADD PARTITION ({part_key}) LOCATION '{entry['LOCATION']}';\n"
                     alter_statements.append(temp)
 
-        create_statement = f"CREATE {table_type} `{catalog}`.`{table_name}`(\n  {column_string}) {table_comment} {partition_key_string} {clustered_by_string} {row_format} {format_string} {location_string} {stored_by} {serde_properties} {tbl_properties};\n\n"
+        if table_type == 'TABLE':
+            create_statement = f"CREATE {table_type} `{catalog}`.`{table_name}`(\n  {column_string}) {table_comment} {partition_key_string} {clustered_by_string} {row_format} {serde_properties} {format_string} {stored_by} {tbl_properties};\n\n"
+        else:
+            create_statement = f"CREATE {table_type} `{catalog}`.`{table_name}`(\n  {column_string}) {table_comment} {partition_key_string} {clustered_by_string} {row_format} {serde_properties} {format_string} {location_string} {stored_by} {tbl_properties};\n\n"
+
         ofd.write(create_statement)
         for alter_statement in alter_statements:
             logging.debug(f"{alter_statement}")
