@@ -20,9 +20,19 @@ Clone this repo
 
 ```git clone https://github.com/pmereddy/hms_util.git```
 
-Install the depdendencies
+Install depdendencies
 
-```pip3 install psycopg2-binary```
+PostgreSQL
+```
+pip3 install psycopg2-binary
+```
+
+MySQL
+```
+Install python3-devel if not installed
+pip3 install mysql
+pip3 install mysql-connector-python==8.0.20
+```
 
 # Configuration
 The **config** file option (defaults to config.ini in the project directory) is the only way to specify the command and parameters to run this tool. 
