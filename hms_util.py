@@ -1,11 +1,11 @@
 ################################################################################
 """
-Script Name: 
+Script Name:
 Description: A utility script for hive metastore
 Version: 1
 Author: Pramodh Mereddy
 
-Disclaimer: This script is fairly new and has not been tested very well in the field. 
+Disclaimer: This script is fairly new and has not been tested very well in the field.
             Please use it cautiously
 """
 ################################################################################
@@ -22,8 +22,10 @@ import getpass
 import logging
 import argparse
 import traceback
-import psycopg2
-from psycopg2 import pool
+#import psycopg2
+#from psycopg2 import pool
+from mysql.connector import (connection)
+from mysql.connector import pooling
 
 
 """ Helper function """
@@ -118,7 +120,7 @@ def tuples_to_markdown_table(query_name, columns, records):
     for row in records:
         values = [str(value) for value in row]
         rows.append(" | ".join(values))
-    
+
     # Combine header, header separator, and rows
     markdown_table = "\n".join([table_header, header_row, header_separator] + rows + [table_footer])
     return markdown_table
@@ -135,17 +137,38 @@ def read_query_file(filename):
         sys.exit(1)
 
 
+def get_db_connection():
+    if get_property(config, 'global', 'database_type', '') == 'postgres':
+        connection = connection_pool.getconn()
+    elif get_property(config, 'global', 'database_type', '') == 'mysql':
+        connection = connection_pool.get_connection()
+    else:
+        connection = None
+    return connection
+
+
+def put_db_connection(connection):
+    if get_property(config, 'global', 'database_type', '') == 'postgres':
+        connection_pool.putconn(connection)
+    elif get_property(config, 'global', 'database_type', '') == 'mysql':
+        connection.close()
+    
 """ Function to get hive database summary """
-def get_summary(database, catalog, queries, **kwargs):
+def get_summary(db_type, database, catalog, queries, **kwargs):
     summary={}
     logging.info(f"Get summary for database: {catalog}")
     try:
-        connection = connection_pool.getconn()
+        connection = get_db_connection()
         cursor = connection.cursor()
         table=kwargs.get('table', 'ALL')
         table_filter=""
         if table != 'ALL':
-            table_filter=f"\"TBL_NAME\"='{table}' and"
+            if db_type == 'postgres':
+                table_filter=f"\"TBL_NAME\"='{table}' and"
+            elif db_type == 'mysql':
+                table_filter=f"TBL_NAME='{table}' and"
+            else:
+                table_filter=f"\"TBL_NAME\"='{table}' and"
         for query_name, query_template in queries.items():
             # catalog is always hive
             formatted_query = query_template.format(database='hive', catalog=catalog, past_days=kwargs.get('past_days', 1), table=table, table_filter=table_filter)
@@ -160,7 +183,7 @@ def get_summary(database, catalog, queries, **kwargs):
     except Exception as e:
         traceback.print_exc()
         logging.error(f"An error occurred in get_summary: {e}")
-    connection_pool.putconn(connection)
+    put_db_connection(connection)
     return summary
 
 
@@ -183,7 +206,7 @@ def create_database_reports(database, catalog, queries, results_dir):
     md_tables=[]
     html_tables=[]
     try:
-        connection = connection_pool.getconn()
+        connection = get_db_connection()
         cursor = connection.cursor()
         md_results_file=os.path.join(results_dir, f"{catalog}_reports_{signature}.md")
         html_results_file=os.path.join(results_dir, f"{catalog}_reports_{signature}.html")
@@ -217,24 +240,24 @@ def create_database_reports(database, catalog, queries, results_dir):
 
         title="Database reports"
         with open(html_results_file, 'w') as hfd:
-            write_section1(hfd, title)        
+            write_section1(hfd, title)
             for table in html_tables:
                 for k,v in table.items():
                     hfd.write(v)
-            write_section2(hfd)        
+            write_section2(hfd)
         logging.info(f"Database {config['global']['command']} saved to {html_results_file}")
 
     except Exception as e:
         traceback.print_exc()
         logging.error(f"error writing to report files in create_database_reports: {e}")
-    connection_pool.putconn(connection)
+    put_db_connection(connection)
 
 
-""" 
+"""
 Function to extract and save hive table DDL
 """
 def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
-    connection = connection_pool.getconn()
+    connection = get_db_connection()
     cursor = connection.cursor()
     create_statement=""
     try:
@@ -410,7 +433,7 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
         print("Error:", e)
     finally:
         cursor.close()
-        connection_pool.putconn(connection)
+        put_db_connection(connection)
 
 """
 Function to generate DDL to convert eligible hive tables to iceberg
@@ -425,7 +448,7 @@ def iceberg_migration_ddl(database, catalog, results_file, output_file):
 
     try:
         logging.info(f"Running iceberg migration for database: {catalog}")
-        connection = connection_pool.getconn()
+        connection = get_db_connection()
         cursor = connection.cursor()
         list_tables = f'SELECT a."TBL_ID", a."TBL_NAME", a."TBL_TYPE", b."IS_COMPRESSED", b."IS_STOREDASSUBDIRECTORIES", b."INPUT_FORMAT", b."OUTPUT_FORMAT",c."SLIB" FROM "TBLS" a inner join "SDS" b on a."SD_ID"=b."SD_ID" INNER JOIN "SERDES" c on b."SERDE_ID"=c."SERDE_ID" where a."DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\');'
         cursor.execute(list_tables)
@@ -479,17 +502,17 @@ def iceberg_migration_ddl(database, catalog, results_file, output_file):
         traceback.print_exc()
     finally:
         cursor.close()
-        connection_pool.putconn(connection)
+        put_db_connection(connection)
 
 
 """
 Function to extract and save hive object DDL
 """
-def backup_database_ddl(database, catalog, output_file, queries):
+def backup_database_ddl(db_type, database, catalog, output_file, queries):
     try:
         status_counter=0
         logging.info(f"Extracting DDL for database: {catalog}")
-        connection = connection_pool.getconn()
+        connection = get_db_connection()
         cursor = connection.cursor()
 
         with open(output_file, 'w') as fd:
@@ -498,7 +521,10 @@ def backup_database_ddl(database, catalog, output_file, queries):
 
         # Create database statement
         if get_property(config, 'schema_backup', 'create_db_statement', 'true') == 'true':
-            create_db = f'select "DESC", "DB_LOCATION_URI" from "DBS" where "NAME"=\'{catalog}\''
+            if db_type == 'postgres':
+                create_db = f'select "DESC", "DB_LOCATION_URI" from "DBS" where "NAME"=\'{catalog}\''
+            elif db_type == 'mysql':
+                create_db = f'select `DESC`, DB_LOCATION_URI from DBS where NAME=\'{catalog}\''
             cursor.execute(create_db)
             results = cursor.fetchone()
             if len(results) > 0:
@@ -512,14 +538,18 @@ def backup_database_ddl(database, catalog, output_file, queries):
                 return
 
         # Get tables
-        table_list_cmd = f'select "TBL_NAME" from "TBLS" where "TBL_TYPE" not in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "TBL_ID"'
+        if db_type == 'postgres':
+            table_list_cmd = f'select "TBL_NAME" from "TBLS" where "TBL_TYPE" not in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "TBL_ID"'
+        elif db_type == 'mysql':
+            table_list_cmd = f'select TBL_NAME from TBLS where TBL_TYPE not in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and DB_ID=(select DB_ID from DBS where NAME=\'{catalog}\') order by TBL_ID'
         cursor.execute(table_list_cmd)
         rows = cursor.fetchall()
         total_tables=len(rows)
         logging.info(f"Found {total_tables} tables in {catalog}")
         with open(output_file, 'a') as fd:
             for row in rows:
-                backup_table_ddl(database, catalog, row[0], queries, fd)
+                backup_table_ddl('hive', catalog, row[0], queries, fd)
+                #backup_table_ddl(database, catalog, row[0], queries, fd)
                 if status_counter > 0 and total_tables > 10 and status_counter%(int(total_tables/10)) == 0:
                     logging.info(f"Processed {status_counter} tables")
                 status_counter = status_counter + 1
@@ -528,13 +558,20 @@ def backup_database_ddl(database, catalog, output_file, queries):
         # Get views and materialized views and append to the results file at the end.
         # The views and materialized views are ordered to resolve the dependencies
         if get_property(config, 'schema_backup', 'include_views', 'true') == 'true':
-            view_list_cmd = f'select "TBL_ID" from "TBLS" where "TBL_TYPE" in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "TBL_ID"'
+            if db_type == 'postgres':
+                view_list_cmd = f'select "TBL_ID" from "TBLS" where "TBL_TYPE" in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "TBL_ID"'
+            elif db_type == 'mysql':
+                view_list_cmd = f'select TBL_ID from TBLS where TBL_TYPE in (\'VIRTUAL_VIEW\',\'MATERIALIZED_VIEW\') and DB_ID=(select DB_ID from DBS where NAME=\'{catalog}\') order by TBL_ID'
+
             cursor.execute(view_list_cmd)
             rows = cursor.fetchall()
             logging.info(f"Found {len(rows)} views in {catalog}")
             with open(output_file, 'a') as fd:
                 for row in rows:
-                    formatted_query=f'select "TBL_TYPE", "VIEW_EXPANDED_TEXT", "TBL_NAME" from "TBLS" where "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') and "TBL_ID"={row[0]}'
+                    if db_type == 'postgres':
+                        formatted_query=f'select "TBL_TYPE", "VIEW_EXPANDED_TEXT", "TBL_NAME" from "TBLS" where "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') and "TBL_ID"={row[0]}'
+                    elif db_type == 'mysql':
+                        formatted_query=f'select TBL_TYPE, VIEW_EXPANDED_TEXT, TBL_NAME from TBLS where DB_ID=(select DB_ID from DBS where NAME=\'{catalog}\') and TBL_ID={row[0]}'
                     cursor.execute(formatted_query)
                     results = cursor.fetchone()
                     if len(results) > 0:
@@ -548,7 +585,10 @@ def backup_database_ddl(database, catalog, output_file, queries):
 
         # Get functions DDL and add to the end of the results file
         if get_property(config, 'schema_backup', 'include_functions', 'true') == 'true':
-            func_list_cmd = f'select "CLASS_NAME", "FUNC_NAME","FUNC_TYPE", "OWNER_NAME" from "FUNCS" where "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "FUNC_ID"'
+            if db_type == 'postgres':
+                func_list_cmd = f'select "CLASS_NAME", "FUNC_NAME","FUNC_TYPE", "OWNER_NAME" from "FUNCS" where "DB_ID"=(select "DB_ID" from "DBS" where "NAME"=\'{catalog}\') order by "FUNC_ID"'
+            elif db_type == 'mysql':
+                func_list_cmd = f'select CLASS_NAME, FUNC_NAME,FUNC_TYPE, OWNER_NAME from FUNCS where DB_ID=(select DB_ID from DBS where NAME=\'{catalog}\') order by FUNC_ID'
             cursor.execute(func_list_cmd)
             rows = cursor.fetchall()
             with open(output_file, 'a') as fd:
@@ -561,7 +601,7 @@ def backup_database_ddl(database, catalog, output_file, queries):
         connection.rollback()
     finally:
         cursor.close()
-        connection_pool.putconn(connection)
+        put_db_connection(connection)
 
 
 if __name__ == "__main__":
@@ -587,6 +627,10 @@ if __name__ == "__main__":
         for option in global_section:
             logger.log(logging.DEBUG, f"{option} = {global_section[option]}")
         logger.log(logging.DEBUG, f"\n")
+        if 'database_type' in config['global']:
+            db_type=config['global']['database_type']
+        else:
+            db_type='postgres'
     else:
         logging.error("Invalid config file: missing global section")
         sys.exit(1)
@@ -641,13 +685,28 @@ if __name__ == "__main__":
 
     # Connect to source hive metastore
     try:
-        connection_pool = psycopg2.pool.SimpleConnectionPool(
-            minconn=1, maxconn=5,
+        if db_type == 'postgres':
+            connection_pool = psycopg2.pool.SimpleConnectionPool(
+                        minconn=1,
+                        maxconn=5,
                         dbname=get_property(config, 'source', 'database', 'hive'),
                         user=get_property(config, 'source', 'user', 'hive'),
                         password=password,
                         host=get_property(config, 'source', 'host', 'localhost'),
                         port=get_property(config, 'source', 'port', 5432))
+        elif db_type == 'mysql':
+            connection_pool = pooling.MySQLConnectionPool(
+                              pool_name="pynative_pool",
+                              pool_size=5,
+                              pool_reset_session=False,
+                              user=get_property(config, 'source', 'user', 'hive'), 
+                              password=password,
+                              host=get_property(config, 'source', 'host', 'localhost'),
+                              database='hive1', 
+                              port=get_property(config, 'source', 'port', 3306))
+        else:
+            logging.error("Unknown database type")
+            sys.exit(1)
     except Exception as e:
         logging.error("Connecting to source: {e}")
         sys.exit(1)
@@ -656,13 +715,17 @@ if __name__ == "__main__":
     db = get_property(config, 'global', 'catalog', 'default')
     if db == 'ALL':
         try:
-            get_db_list="select \"NAME\" from \"DBS\" where \"NAME\" not in ('sys', 'information_schema');"
-            connection = connection_pool.getconn()
+            if db_type == 'postgres':
+                get_db_list="select \"NAME\" from \"DBS\" where \"NAME\" not in ('sys', 'information_schema');"
+            elif db_type == 'mysql':
+                get_db_list="select NAME from DBS where NAME not in ('sys', 'information_schema');"
+
+            connection = get_db_connection()
             cursor = connection.cursor()
             cursor.execute(get_db_list)
             tdbs = cursor.fetchall()
             dbs = [db[0] for db in tdbs]
-            connection_pool.putconn(connection)
+            put_db_connection(connection)
         except Exception as e:
             logging.error("Connecting to source: {e}")
             sys.exit(1)
@@ -678,7 +741,7 @@ if __name__ == "__main__":
                                   get_property(config, 'global', 'database_type', 'postgresql'),
                                   get_property(config, 'summary', 'query_file', 'summary.queries'))
                 )
-                summary_info = get_summary(
+                summary_info = get_summary(db_type,
                     get_property(config, 'source', 'database', 'hive'),
                     db,
                     queries
@@ -706,7 +769,7 @@ if __name__ == "__main__":
                     get_property(config, 'source', 'database', 'hive'),
                     db,
                     report_queries,
-                    results_dir 
+                    results_dir
                 )
             except Exception as e:
                 logging.error(f"Database reports: {e}")
@@ -720,7 +783,7 @@ if __name__ == "__main__":
                                   get_property(config, 'schema_backup', 'query_file', 'backup_ddl.queries')))
                 filebase = f"{db}_backup_{signature}.ddl"
                 results_file = os.path.join(results_dir, filebase)
-                backup_database_ddl(
+                backup_database_ddl(db_type,
                     get_property(config, 'source', 'database', 'hive'),
                     db,
                     results_file,
