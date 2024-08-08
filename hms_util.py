@@ -265,6 +265,7 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
         table_type='TABLE'
         serde_id=0
         sd_id=0
+        cd_id=0
         column_string=""
         tbl_properties=""
         serde_properties=""
@@ -280,7 +281,7 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
         alter_statement_string=""
         for query_name, query_template in table_ddl_queries.items():
             formatted_query = query_template.format(database=database, catalog=catalog,
-                table=table, table_id=table_id, serde_id=serde_id, sd_id=sd_id,
+                table=table, table_id=table_id, serde_id=serde_id, sd_id=sd_id, cd_id=cd_id,
                 db_location_uri=db_location_uri, db_managed_uri=db_managed_uri)
             logging.debug(f"Executing query {query_name} : {formatted_query}")
             cursor.execute(formatted_query)
@@ -305,6 +306,7 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
             if query_name == 'Q2':
                 if len(results) > 0:
                     sd_id = results[0].get('SD_ID')
+                    cd_id = results[0].get('CD_ID')
                     location = results[0].get('LOCATION')
                     db_location_uri = results[0].get('DB_LOCATION_URI')
                     db_managed_uri = results[0].get('DB_MANAGED_LOCATION_URI')
