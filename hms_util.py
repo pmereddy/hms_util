@@ -423,7 +423,12 @@ def backup_table_ddl(database, catalog, table, table_ddl_queries, ofd):
         else:
             create_statement = f"CREATE {table_type} `{catalog}`.`{table_name}`(\n  {column_string}) {table_comment} {partition_key_string} {clustered_by_string} {row_format} {serde_properties} {format_string} {location_string} {stored_by} {tbl_properties};\n\n"
 
-        ofd.write(create_statement)
+        if get_property(config, 'schema_backup', 'single_line_statement', 'true') == 'true':
+            new_create_statement = ''.join([char for char in create_statement if char not in ['\n', '\r']])
+            ofd.write(f"{new_create_statement}\n")
+        else:
+            ofd.write(create_statement)
+
         for alter_statement in alter_statements:
             logging.debug(f"{alter_statement}")
             ofd.write(alter_statement)
